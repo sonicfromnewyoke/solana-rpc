@@ -31,7 +31,7 @@ RPC=(
     # if --private-rpc is present, otherwise use --bind-address]
     --rpc-bind-address 0.0.0.0
     # Range to use for dynamically assigned ports [default: 8000-10000]
-    --dynamic-port-range 8000-8025
+    --dynamic-port-range 8000-8100
     # Expose RPC methods for querying chain state and transaction history
     --full-rpc-api
     # Do not publish the RPC port for use by others
@@ -50,12 +50,13 @@ RPC=(
 REPLAY=(
     # Number of threads to use for replay of blocks on different forks
     --replay-forks-threads 4
+    # Number of threads to use for transaction replay
+    --replay-transactions-threads 8
 )
 
 POH=(
     # EXPERIMENTAL: Specify which CPU core PoH is pinned to
     --experimental-poh-pinned-cpu-core 10
-
 )
 
 RETRANSMIT=(
@@ -63,22 +64,19 @@ RETRANSMIT=(
     --experimental-retransmit-xdp-zero-copy
     # EXPERIMENTAL: Specify which CPU core XDP retransmit is pinned to
     --experimental-retransmit-xdp-cpu-cores 1
+    # EXPERIMENTAL: The network interface to use for XDP retransmit
+    --experimental-retransmit-xdp-interface eth0
 )
 
 LEDGER=(
     # Number of threads to use for background accounts hashing
-    --accounts-db-hash-threads 2
+    --accounts-db-background-threads 2
     # Use DIR as ledger location [default: ledger]
     --ledger /mnt/ledger
     # Comma separated persistent accounts location. May be specified multiple times. [default: <LEDGER>/accounts]
     --accounts /mnt/accounts
     # Keep this amount of shreds in root slots.
     --limit-ledger-size 50000000
-    # Access account storages using this method [possible values: mmap, file]
-    --accounts-db-access-storages-method file
-    # Disable the disk-based accounts index. It is enabled by default.
-    # The entire accounts index will be kept in memory.
-    --disable-accounts-disk-index
     # Mode to recovery the ledger db write ahead log. 
     # [possible values: tolerate_corrupted_tail_records, absolute_consistency, point_in_time, skip_any_corrupted_record]
     --wal-recovery-mode skip_any_corrupted_record

@@ -58,8 +58,8 @@ sudo ufw enable
 
 sudo ufw allow 22/tcp
 sudo ufw allow 20000/udp
-sudo ufw allow 8000:8020/tcp
-sudo ufw allow 8000:8020/udp
+sudo ufw allow 8000:8100/tcp
+sudo ufw allow 8000:8100/udp
 
 sudo ufw deny 8899/tcp
 sudo ufw deny 8899/udp
@@ -174,8 +174,8 @@ should contains something similar
 
 ...
 
-UUID="03477038-6fa7-4de3-9ca6-4b0aef52bf42" /mnt/ledger xfs defaults,noatime,logbufs=8,nofail 0 0
-UUID="68ff3738-f9f7-4423-a24c-68d989a2e496" /mnt/accounts xfs defaults,noatime,logbufs=8,nofail 0 0
+UUID="03477038-6fa7-4de3-9ca6-4b0aef52bf42" /mnt/ledger xfs defaults,noatime,logbufs=8,largeio,inode64,allocsize=64m,nofail 0 0
+UUID="68ff3738-f9f7-4423-a24c-68d989a2e496" /mnt/accounts xfs defaults,noatime,logbufs=8,largeio,inode64,allocsize=64m,nofail 0 0
 ```
 
 ## 🌵 Agave Client
@@ -209,8 +209,8 @@ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang lib
 git clone https://github.com/anza-xyz/agave.git
 cd agave
 
-# let's asume we would like to build v3.0.7 of validator
-export TAG="v3.0.7" 
+# let's asume we would like to build v3.1.8 of validator
+export TAG="v3.1.8" 
 git switch tags/$TAG --detach
 ```
 
@@ -229,6 +229,18 @@ export PATH=$PWD/bin:$PATH
 ```bash
 echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 ```
+
+### Enable CPU Boost
+
+With the governor set to `performance`, ensure CPU boost (Turbo Boost / Precision Boost) is also enabled — on some systems it is a separate knob:
+
+```bash
+cat /sys/devices/system/cpu/cpufreq/boost
+echo 1 | sudo tee /sys/devices/system/cpu/cpufreq/boost
+```
+
+> [!NOTE]
+> The GRUB parameter `amd_pstate=passive` allows boost to function on AMD CPUs. On Intel, boost is controlled via the `intel_pstate` driver and is enabled by default in performance mode.
 
 ### Disable THP (Transparent Huge Pages)
 
@@ -259,6 +271,30 @@ Migration of memory pages between NUMA nodes will cause TLB shootdowns and page 
 echo 0 > /proc/sys/kernel/numa_balancing
 ```
 
+### NVMe I/O Scheduler
+
+For NVMe devices the kernel may default to `mq-deadline` or `bfq`, both of which add queueing latency. Set the scheduler to `none` (passthrough) so I/O goes directly to the NVMe queue:
+
+```bash
+echo none | sudo tee /sys/block/nvme*/queue/scheduler
+```
+
+Disable read-ahead — RocksDB and accounts access patterns are largely random, so prefetching wastes bandwidth:
+
+```bash
+echo 0 | sudo tee /sys/block/nvme*/queue/read_ahead_kb
+```
+
+Persist both across reboots with a udev rule:
+
+```bash
+sudo bash -c 'cat > /etc/udev/rules.d/60-nvme-scheduler.rules <<EOF
+ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/read_ahead_kb}="0"
+EOF'
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
 ### Huge and Gigantic Pages
 
 ```bash
@@ -287,12 +323,22 @@ net.core.rmem_max = 134217728
 net.core.wmem_default = 134217728
 net.core.wmem_max = 134217728
 
+# Connection backlog (critical for RPC node)
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+
+# NIC receive queue (critical for QUIC/UDP)
+net.core.netdev_max_backlog = 250000
+
+# XDP ancillary buffer
+net.core.optmem_max = 65536
+
 # TCP Optimization
-net.ipv4.tcp_congestion_control=westwood
+net.ipv4.tcp_congestion_control=bbr
+net.core.default_qdisc=fq
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_timestamps=0
 net.ipv4.tcp_sack=1
-net.ipv4.tcp_low_latency=1
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.tcp_no_metrics_save=1
 net.ipv4.tcp_moderate_rcvbuf=1
@@ -301,6 +347,7 @@ net.ipv4.tcp_moderate_rcvbuf=1
 kernel.timer_migration=0
 kernel.hung_task_timeout_secs=30
 kernel.pid_max=49152
+kernel.nmi_watchdog=0
 
 # Virtual Memory Tuning
 vm.swappiness=0
@@ -354,6 +401,43 @@ sudo bash -c "cat >/etc/security/limits.d/90-solana-nofiles.conf <<EOF
 * - memlock 2000000
 EOF"
 ```
+
+### NIC Tuning
+
+#### Disable `irqbalance`
+
+The GRUB `irqaffinity=` parameter pins hardware interrupts away from the PoH core, but `irqbalance` runs as a service and periodically overrides manual IRQ assignments. Disable it:
+
+```bash
+sudo systemctl disable --now irqbalance
+```
+
+#### Increase NIC ring buffers and reduce interrupt coalescing
+
+Default NIC ring buffers are small and interrupt coalescing adds latency. Tune with `ethtool` (replace `eth0` with your interface name):
+
+```bash
+ip link show
+```
+Look for the interface that has state UP. It'll typically be named `eth0`, `ens3`, `enp5s0`, `bond0`, etc. — the naming depends on the system.
+
+```bash
+# For just the name of the primary interface (the one with the default route):
+ip route get 1.1.1.1 | awk '{print $5; exit}'
+```
+
+```bash
+# Check current and maximum ring buffer sizes
+ethtool -g eth0
+
+# Increase RX/TX ring buffers to reduce packet drops under QUIC burst traffic
+sudo ethtool -G eth0 rx 4096 tx 4096
+
+# Disable adaptive coalescing and minimize interrupt delay for lower latency
+sudo ethtool -C eth0 adaptive-rx off adaptive-tx off rx-usecs 0 tx-usecs 0
+```
+
+To persist across reboots, add these commands to a systemd `ExecStartPost` or a `/etc/networkd-dispatcher` script.
 
 ### Isolate one core for PoH
 
