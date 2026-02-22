@@ -178,6 +178,14 @@ UUID="03477038-6fa7-4de3-9ca6-4b0aef52bf42" /mnt/ledger xfs defaults,noatime,log
 UUID="68ff3738-f9f7-4423-a24c-68d989a2e496" /mnt/accounts xfs defaults,noatime,logbufs=8,largeio,inode64,allocsize=64m,nofail 0 0
 ```
 
+To verify the mounts are active with correct options:
+
+```bash
+mount | grep -E 'ledger|accounts'
+# or
+findmnt /mnt/ledger /mnt/accounts
+```
+
 ## 🌵 Agave Client
 
 ### Install rustc, cargo and rustfmt
@@ -616,6 +624,40 @@ sudo systemctl enable --now sol
 ```bash
 sudo systemctl status sol.service
 ```
+
+### Restarting with Local Snapshots
+
+Re-downloading a snapshot from the network on every restart wastes time. The `validator.sh` script automatically passes `--no-snapshot-fetch` when a local full snapshot is detected in `/mnt/ledger`, so you only need to ensure a fresh snapshot exists before stopping the service.
+
+#### 1. Wait for a restart window and verify a snapshot is ready
+
+```bash
+agave-validator -l /mnt/ledger wait-for-restart-window --min-idle-time 2
+```
+
+This blocks until the validator is at least 2 minutes from being scheduled as a leader **and** a fresh full snapshot has been written to disk. It is the safest way to prepare for a restart.
+
+> [!TIP]
+> Add `--skip-new-snapshot-check` if you already have a recent snapshot and just want to find a quiet window without waiting for a new one to be generated.
+
+#### 2. Confirm a snapshot exists
+
+```bash
+ls -lh /mnt/ledger/snapshot-*.tar.zst
+```
+
+You should see at least one file like `snapshot-<slot>-<hash>.tar.zst`.
+
+#### 3. Restart the service
+
+```bash
+sudo systemctl restart sol
+```
+
+Because a `snapshot-*.tar.zst` file is present, `validator.sh` will start with `--no-snapshot-fetch` and use the local snapshot, cutting restart time down to a few minutes.
+
+> [!NOTE]
+> On a **fresh machine** (no local snapshots) the script falls back to downloading a snapshot from the network automatically — no manual intervention needed.
 
 ### Setup Shredstream Proxy
 

@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Use local snapshots if available to avoid re-downloading on restart.
+# Falls back to network download on first boot or if snapshots are missing.
+if compgen -G "/mnt/ledger/snapshot-*.tar.zst" > /dev/null 2>&1; then
+    SNAPSHOT_SOURCE=(--no-snapshot-fetch)
+else
+    SNAPSHOT_SOURCE=()
+fi
+
 CONSENSUS=(
     # Validator identity keypair
     --identity /home/sol/validator-keypair.json
@@ -91,8 +99,6 @@ SNAPSHOTS=(
     --minimal-snapshot-download-speed 20971520
     # The maximum number of full snapshot archives to hold on to when purging older snapshots. [default: 2]
     --maximum-full-snapshots-to-retain 1
-    # Number of slots between generating full snapshots [default: 50000]
-    --full-snapshot-interval-slots 25000
     # The maximum number of incremental snapshot archives to hold on to when purging older snapshots.
     # [default: 4]
     --maximum-incremental-snapshots-to-retain 2
@@ -115,4 +121,4 @@ REPORTING=(
     --no-os-disk-stats-reporting
 )
 
-exec agave-validator ${CONSENSUS[@]} ${GOSSIP[@]} ${RPC[@]} ${REPLAY[@]} ${POH[@]} ${RETRANSMIT[@]} ${LEDGER[@]} ${SNAPSHOTS[@]} ${LOG[@]} ${REPORTING[@]}
+exec agave-validator ${CONSENSUS[@]} ${GOSSIP[@]} ${RPC[@]} ${REPLAY[@]} ${POH[@]} ${RETRANSMIT[@]} ${LEDGER[@]} ${SNAPSHOTS[@]} ${SNAPSHOT_SOURCE[@]} ${LOG[@]} ${REPORTING[@]}
