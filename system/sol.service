@@ -1,20 +1,26 @@
 [Unit]
 Description=Solana Validator
-After=network.target
+After=network-online.target
+Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 Restart=always
-RestartSec=1
+RestartSec=5
+Nice=-10
+# Pin validator to all cores except isolated PoH core 10 and its hyperthread 34.
+# Redundant if GRUB isolcpus= is set, but acts as a safety net.
+# CPUAffinity=0-9 11-33 35-47
 LimitNOFILE=2000000
 LimitMEMLOCK=2000000000
 LogRateLimitIntervalSec=0
 User=sol
 Environment="PATH=/home/sol/agave/bin"
 Environment=SOLANA_METRICS_CONFIG=host=https://metrics.solana.com:8086,db=mainnet-beta,u=mainnet-beta_write,p=password
-ExecStart=/home/sol/bin/validator.sh
+ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 /home/sol/bin/validator.sh
 ExecStop=/home/sol/agave/bin/agave-validator --ledger /mnt/ledger exit
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target

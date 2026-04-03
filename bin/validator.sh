@@ -53,6 +53,8 @@ RPC=(
     --enable-rpc-transaction-history
     # Enable Geyser interface even if no Geyser configs are specified
     --geyser-plugin-always-enabled
+    # Disable TPU batching delay for lowest-latency transaction forwarding
+    --tpu-coalesce-ms 0
 )
 
 REPLAY=(
@@ -60,6 +62,12 @@ REPLAY=(
     --replay-forks-threads 4
     # Number of threads to use for transaction replay
     --replay-transactions-threads 8
+    # Number of threads for TPU transaction receive
+    --tpu-transaction-receive-threads 2
+    # Number of threads for TVU shred receive
+    --tvu-receive-threads 2
+    # Number of threads for shred signature verification
+    --tvu-shred-sigverify-threads 4
 )
 
 POH=(
@@ -85,9 +93,13 @@ LEDGER=(
     --accounts /mnt/accounts
     # Keep this amount of shreds in root slots.
     --limit-ledger-size 50000000
-    # Mode to recovery the ledger db write ahead log. 
+    # Mode to recovery the ledger db write ahead log.
     # [possible values: tolerate_corrupted_tail_records, absolute_consistency, point_in_time, skip_any_corrupted_record]
     --wal-recovery-mode skip_any_corrupted_record
+    # Number of threads for RocksDB compaction
+    --rocksdb-compaction-threads 4
+    # Number of threads for RocksDB memtable flush
+    --rocksdb-flush-threads 2
 )
 
 SNAPSHOTS=(

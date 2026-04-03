@@ -154,7 +154,6 @@ And lastly, mount the drive:
 sudo mount -o noatime -o logbufs=0 -o nofail   /dev/nvme1n1 /mnt/accounts
 ```
 
-
 #### Modify fstab
 
 ```bash
@@ -217,8 +216,8 @@ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang lib
 git clone https://github.com/anza-xyz/agave.git
 cd agave
 
-# let's asume we would like to build v3.1.8 of validator
-export TAG="v3.1.8" 
+# let's asume we would like to build v3.1.11 of validator
+export TAG="v3.1.11" 
 git switch tags/$TAG --detach
 ```
 
@@ -305,6 +304,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ### Huge and Gigantic Pages
 
+Agave's accounts-db uses memory-mapped files extensively. Huge pages (2 MB) and gigantic pages (1 GB) reduce TLB (Translation Lookaside Buffer) pressure, which improves performance for random access patterns across large memory regions like the accounts index.
+
 ```bash
 sudo mkdir -p /mnt/hugepages
 sudo mount -t hugetlbfs -o pagesize=2097152,min_size=228589568 none /mnt/hugepages
@@ -316,6 +317,16 @@ cat /proc/mounts | grep hugetlbfs
 # none /mnt/hugepages hugetlbfs rw,seclabel,relatime,pagesize=2M,min_size=95124124 0 0
 # none /mnt/gigantic hugetlbfs rw,seclabel,relatime,pagesize=1024M,min_size=540092137472 0 0
 ```
+
+To persist across reboots, add to `/etc/fstab`:
+
+```
+none /mnt/hugepages hugetlbfs pagesize=2M,min_size=218M 0 0
+none /mnt/gigantic hugetlbfs pagesize=1G,min_size=26G 0 0
+```
+
+> [!NOTE]
+> The kernel must have enough free contiguous memory to allocate huge pages. Allocate them early after boot for best results. Monitor availability with `cat /proc/meminfo | grep -i huge`.
 
 ### Sysctl Tuning
 
@@ -359,6 +370,8 @@ kernel.nmi_watchdog=0
 
 # Virtual Memory Tuning
 vm.swappiness=0
+# NOTE: With swappiness=0 and no swap partition, the OOM killer triggers early.
+# This is intentional — swapping accounts-db to disk would be worse than restarting.
 vm.max_map_count = 2000000
 vm.stat_interval=10
 vm.dirty_ratio=40
@@ -447,6 +460,24 @@ sudo ethtool -C eth0 adaptive-rx off adaptive-tx off rx-usecs 0 tx-usecs 0
 
 To persist across reboots, add these commands to a systemd `ExecStartPost` or a `/etc/networkd-dispatcher` script.
 
+### NUMA Pinning
+
+AMD Zen 3/4 CPUs have multiple CCDs (Core Complex Dies), each with its own L3 cache. Cross-CCD memory access adds latency. Pin the validator to a single NUMA node to keep memory accesses local:
+
+```bash
+# Check your NUMA topology
+numactl --hardware
+```
+
+If you have multiple NUMA nodes, launch the validator pinned to one node by modifying the systemd service `ExecStart`:
+
+```ini
+ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 /home/sol/bin/validator.sh
+```
+
+> [!NOTE]
+> On single-socket single-CCD systems (e.g., Ryzen 9 7950X or EPYC with one NUMA node), this is unnecessary. Check `numactl --hardware` first — if you only see `node 0`, skip this step.
+
 ### Isolate one core for PoH
 
 > [!NOTE]
@@ -489,7 +520,7 @@ update-grub
 > [!NOTE]
 > - `nohz_full=10,34` enables full dynamic ticks for core 10 and its hyperthread 34 to reducing overhead and latency.
 > - `isolcpus=domain,managed_irq,10,34` isolates core 10 and hyperthread 34 from the general scheduler
-> - `irqaffinity=0-9,11-33,25-47` directs interrupts away from core 10 and hyperthread 34 
+> - `irqaffinity=0-9,11-33,35-47` directs interrupts away from core 10 and hyperthread 34 
 
 #### Set the poh thread to core 10
 
@@ -539,7 +570,7 @@ fi
 your validator binary will need to have access to a few higher level permissions.  To give the minimal required set of privileges to the binary run the following command:
 
 ```bash
-sudo setcap cap_net_raw,cap_bpf,cap_net_admin=p
+sudo setcap cap_net_raw,cap_bpf,cap_net_admin=p /home/sol/agave/bin/agave-validator
 ```
 
 ## 🚀 Validator Startup
@@ -584,6 +615,7 @@ User=sol
 Environment="PATH=/home/sol/agave/bin"
 Environment=SOLANA_METRICS_CONFIG=host=https://metrics.solana.com:8086,db=mainnet-beta,u=mainnet-beta_write,p=password
 ExecStart=/home/sol/bin/validator.sh
+ExecStop=/home/sol/agave/bin/agave-validator --ledger /mnt/ledger exit
 
 [Install]
 WantedBy=multi-user.target
