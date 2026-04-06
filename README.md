@@ -462,21 +462,29 @@ To persist across reboots, add these commands to a systemd `ExecStartPost` or a 
 
 ### NUMA Pinning
 
-AMD Zen 3/4 CPUs have multiple CCDs (Core Complex Dies), each with its own L3 cache. Cross-CCD memory access adds latency. Pin the validator to a single NUMA node to keep memory accesses local:
+AMD Zen 3/4 CPUs have multiple CCDs (Core Complex Dies), each with its own L3 cache. Cross-CCD memory access adds latency. NUMA configuration depends on your topology:
 
 ```bash
 # Check your NUMA topology
 numactl --hardware
 ```
 
-If you have multiple NUMA nodes, launch the validator pinned to one node by modifying the systemd service `ExecStart`:
+**Single NUMA node** (e.g., Ryzen 9 7950X or single-CCD EPYC): no NUMA pinning needed — skip this step.
+
+**2 NUMA nodes with non-uniform distances**: pin to a single node to keep memory accesses local:
 
 ```ini
 ExecStart=/usr/bin/numactl --cpunodebind=0 --membind=0 /home/sol/bin/validator.sh
 ```
 
-> [!NOTE]
-> On single-socket single-CCD systems (e.g., Ryzen 9 7950X or EPYC with one NUMA node), this is unnecessary. Check `numactl --hardware` first — if you only see `node 0`, skip this step.
+**4+ NUMA nodes with uniform distances** (e.g., multi-socket or NPS4 EPYC where cross-node distance is equal): use interleaved memory to distribute evenly across all nodes. Single-node binding is too restrictive — the validator's thread count exceeds one node's core count, and `--membind` to one node limits available RAM.
+
+```ini
+ExecStart=/usr/bin/numactl --interleave=all /home/sol/bin/validator.sh
+```
+
+> [!IMPORTANT]
+> If you isolate a PoH core (e.g., `--experimental-poh-pinned-cpu-core 10`), make sure it is reachable by your NUMA config. For example, if core 10 is on NUMA node 1, using `--cpunodebind=0` would prevent the PoH thread from reaching it. Use `--interleave=all` or include the correct node in `--cpunodebind`.
 
 ### Isolate one core for PoH
 

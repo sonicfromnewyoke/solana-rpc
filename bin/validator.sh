@@ -58,16 +58,20 @@ RPC=(
 )
 
 REPLAY=(
-    # Number of threads to use for replay of blocks on different forks
+    # Number of threads to use for replay of blocks on different forks (max 4)
     --replay-forks-threads 4
-    # Number of threads to use for transaction replay
-    --replay-transactions-threads 8
+    # Number of threads to use for transaction replay (≈ physical cores)
+    --replay-transactions-threads 16
+    # Use unified scheduler for block verification (fastest replay path)
+    --block-verification-method unified-scheduler
+    # Transaction execution threads for unified scheduler (cores/2)
+    --unified-scheduler-handler-threads 8
     # Number of threads for TPU transaction receive
     --tpu-transaction-receive-threads 2
     # Number of threads for TVU shred receive
-    --tvu-receive-threads 2
-    # Number of threads for shred signature verification
-    --tvu-shred-sigverify-threads 4
+    --tvu-receive-threads 4
+    # Number of threads for shred signature verification (≈ physical cores/2)
+    --tvu-shred-sigverify-threads 8
 )
 
 POH=(
@@ -85,8 +89,12 @@ RETRANSMIT=(
 )
 
 LEDGER=(
-    # Number of threads to use for background accounts hashing
-    --accounts-db-background-threads 2
+    # Number of threads for background accounts hashing/shrink (cores/4)
+    --accounts-db-background-threads 4
+    # Number of threads for foreground account operations (≈ physical cores)
+    --accounts-db-foreground-threads 16
+    # More index bins = better parallelism for accounts lookups (power of 2)
+    --accounts-index-bins 128
     # Use DIR as ledger location [default: ledger]
     --ledger /mnt/ledger
     # Comma separated persistent accounts location. May be specified multiple times. [default: <LEDGER>/accounts]
@@ -96,10 +104,14 @@ LEDGER=(
     # Mode to recovery the ledger db write ahead log.
     # [possible values: tolerate_corrupted_tail_records, absolute_consistency, point_in_time, skip_any_corrupted_record]
     --wal-recovery-mode skip_any_corrupted_record
-    # Number of threads for RocksDB compaction
-    --rocksdb-compaction-threads 4
-    # Number of threads for RocksDB memtable flush
-    --rocksdb-flush-threads 2
+    # Skip ledger verification at startup for faster catchup start
+    --skip-startup-ledger-verification
+    # Number of threads for RocksDB compaction (≈ physical cores/2)
+    --rocksdb-compaction-threads 8
+    # Number of threads for RocksDB memtable flush (cores/4)
+    --rocksdb-flush-threads 4
+    # lz4 compression reduces ledger I/O with minimal CPU overhead
+    --rocksdb-ledger-compression lz4
 )
 
 SNAPSHOTS=(
