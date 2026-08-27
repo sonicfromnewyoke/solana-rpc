@@ -54,8 +54,6 @@ For new machines with UFW disabled:
 3. Close RPC port
 
 ```bash
-sudo ufw enable
-
 sudo ufw allow 22/tcp
 sudo ufw allow 20000/udp
 sudo ufw allow 8000:8100/tcp
@@ -64,8 +62,12 @@ sudo ufw allow 8000:8100/udp
 sudo ufw deny 8899/tcp
 sudo ufw deny 8899/udp
 
+sudo ufw enable
 sudo ufw reload
 ```
+
+> [!NOTE]
+> `8000:8100` must match `--dynamic-port-range` in `validator.sh`. Since Agave v4.1 the validator needs 26 ports, so the range must be at least 26 wide.
 
 ### Hard Drive Setup
 
@@ -117,7 +119,7 @@ sudo chown -R sol:sol /mnt/ledger
 Now you can mount the drive:
 
 ```bash
-sudo mount -o noatime -o logbufs=0 -o nofail  /dev/nvme0n1 /mnt/ledger
+sudo mount -o noatime,logbufs=8,largeio,inode64,allocsize=64m /dev/nvme0n1 /mnt/ledger
 ```
 
 #### Formatting And Mounting Drive: AccountsDB
@@ -151,7 +153,7 @@ sudo chown -R sol:sol /mnt/accounts
 And lastly, mount the drive:
 
 ```bash
-sudo mount -o noatime -o logbufs=0 -o nofail   /dev/nvme1n1 /mnt/accounts
+sudo mount -o noatime,logbufs=8,largeio,inode64,allocsize=64m /dev/nvme1n1 /mnt/accounts
 ```
 
 #### Modify fstab
@@ -195,12 +197,10 @@ source $HOME/.cargo/env
 rustup component add rustfmt
 ```
 
-When building the master branch, please make sure you are using the latest stable rust version by running:
+The Agave repo pins the exact compiler in `rust-toolchain.toml` (`1.96.1` for v4.2.1), so `rustup` picks it up automatically on the first `cargo` invocation. Just make sure `rustup` itself is up to date:
 
 ```bash
 rustup update
-rustup default nightly
-rustup override set nightly
 ```
 
 you may need to install libssl-dev, pkg-config, zlib1g-dev, protobuf etc.
@@ -216,8 +216,8 @@ sudo apt-get install libssl-dev libudev-dev pkg-config zlib1g-dev llvm clang lib
 git clone https://github.com/anza-xyz/agave.git
 cd agave
 
-# let's asume we would like to build v3.1.11 of validator
-export TAG="v3.1.11" 
+# let's assume we would like to build v4.2.1 of validator
+export TAG="v4.2.1"
 git switch tags/$TAG --detach
 ```
 
@@ -234,7 +234,7 @@ export PATH=$PWD/bin:$PATH
 ### Set CPU Governor to `Performance`
 
 ```bash
-echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 ```
 
 ### Enable CPU Boost
@@ -255,7 +255,7 @@ Linux transparent huge page (THP) support allows the kernel to automatically pro
 Huge pages reduces TLB pressure, but THP support introduces latency spikes when pages are promoted into huge pages and when memory compaction is triggered.
 
 ```bash
-echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
 ### Disable KSM (Kernel Samepage Merging)
@@ -266,7 +266,7 @@ KSM only operates on memory pages that has been opted in to samepage merging usi
 If needed KSM can be disabled system wide by running the following command:
 
 ```bash
-echo 0 > /sys/kernel/mm/ksm/run
+echo 0 | sudo tee /sys/kernel/mm/ksm/run
 ```
 
 ### Disable automatic NUMA memory balancing
@@ -275,8 +275,11 @@ Linux supports automatic page fault based NUMA memory balancing and manual page 
 Migration of memory pages between NUMA nodes will cause TLB shootdowns and page faults for applications using the affected memory
 
 ```bash
-echo 0 > /proc/sys/kernel/numa_balancing
+echo 0 | sudo tee /proc/sys/kernel/numa_balancing
 ```
+
+> [!NOTE]
+> The THP, KSM and NUMA balancing settings above do not survive a reboot. Persist them with a small `oneshot` systemd unit, or via `/etc/rc.local`.
 
 ### NVMe I/O Scheduler
 
@@ -484,7 +487,7 @@ ExecStart=/usr/bin/numactl --interleave=all /home/sol/bin/validator.sh
 ```
 
 > [!IMPORTANT]
-> If you isolate a PoH core (e.g., `--experimental-poh-pinned-cpu-core 10`), make sure it is reachable by your NUMA config. For example, if core 10 is on NUMA node 1, using `--cpunodebind=0` would prevent the PoH thread from reaching it. Use `--interleave=all` or include the correct node in `--cpunodebind`.
+> If you isolate a PoH core (e.g., `--poh-pinned-cpu-core 10`), make sure it is reachable by your NUMA config. For example, if core 10 is on NUMA node 1, using `--cpunodebind=0` would prevent the PoH thread from reaching it. Use `--interleave=all` or include the correct node in `--cpunodebind`.
 
 ### Isolate one core for PoH
 
@@ -536,9 +539,12 @@ add the cli to your validator
 
 ```
 ...
---experimental-poh-pinned-cpu-core 10 \ 
+--poh-pinned-cpu-core 10 \
 ...
 ```
+
+> [!IMPORTANT]
+> `--experimental-poh-pinned-cpu-core` is deprecated since v4.2 (still accepted, but prints a warning). Since v4.2 PoH is pinned to **core 0** by default on Linux, so always set `--poh-pinned-cpu-core` explicitly to your isolated core. The XDP core (`--xdp-cpu-cores`) must not overlap the PoH core, the validator refuses to start otherwise.
 
 there is a bug with core_affinity if you isolate your cores: [link](https://github.com/anza-xyz/agave/issues/1968)
 
@@ -575,17 +581,38 @@ fi
 
 ### XDP
 
-your validator binary will need to have access to a few higher level permissions.  To give the minimal required set of privileges to the binary run the following command:
+Since Agave v4.2, XDP transmit (SKB / copy mode) is **enabled by default** on Linux. The old `--experimental-retransmit-xdp-*` flags are deprecated since v4.1 in favour of `--xdp-interface`, `--xdp-cpu-cores` and `--xdp-zero-copy`. Pass `--no-xdp` to fall back to plain UDP sockets (also required if you use `--allow-private-addr`).
+
+The validator needs a few Linux capabilities:
+
+| Mode                       | Required capabilities                              |
+| -------------------------- | -------------------------------------------------- |
+| XDP (default, SKB mode)    | `CAP_NET_ADMIN`, `CAP_NET_RAW`                     |
+| XDP with `--xdp-zero-copy` | `CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_BPF`, `CAP_PERFMON` |
+| `--no-xdp`                 | none                                               |
+
+Since v4.0 a **missing** required capability is a hard error (the validator exits with status 1), and capabilities that are permitted but not needed log a warning at startup. There are two supported ways to grant them, pick one:
+
+**Option A (recommended): systemd ambient capabilities.** This is already in [`sol.service`](./system/sol.service) and survives rebuilding the binary:
+
+```ini
+[Service]
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+```
+
+**Option B: file capabilities on the binary.** Must be repeated **every time** the binary is replaced (i.e. after every rebuild):
 
 ```bash
-sudo setcap cap_net_raw,cap_bpf,cap_net_admin=p /home/sol/agave/bin/agave-validator
+sudo setcap cap_net_raw,cap_net_admin,cap_bpf,cap_perfmon=p /home/sol/agave/bin/agave-validator
 ```
+
+> [!NOTE]
+> `--xdp-zero-copy` requires NIC driver support for AF_XDP zero copy (e.g. Intel `i40e`/`ice`, Mellanox `mlx5`). If the validator fails to start in zero copy mode, drop the flag to run in SKB mode.
 
 ## 🚀 Validator Startup
 
-### Options
-
-### Let's use the common one
+### Startup script
 
 ```bash
 mkdir -p /home/sol/bin
@@ -609,25 +636,40 @@ You can use the [`sol.service`](./system/sol.service) from this repo or `sudo vi
 ```ini
 [Unit]
 Description=Solana Validator
-After=network.target
+After=network-online.target
+Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 Restart=always
-RestartSec=1
+RestartSec=5
+Nice=-10
+# Pin validator to all cores except isolated PoH core 10 and its hyperthread 34.
+# Redundant if GRUB isolcpus= is set, but acts as a safety net.
+# CPUAffinity=0-9 11-33 35-47
 LimitNOFILE=2000000
 LimitMEMLOCK=2000000000
 LogRateLimitIntervalSec=0
 User=sol
+# Linux capabilities required for XDP (enabled by default since v4.2).
+# CAP_NET_RAW + CAP_NET_ADMIN are required for XDP; CAP_BPF + CAP_PERFMON only for --xdp-zero-copy.
+# Since v4.0 a missing required capability is a hard error at startup, and unneeded ones log a warning.
+# Using ambient capabilities here means no `setcap` is needed after every rebuild of the binary.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
 Environment="PATH=/home/sol/agave/bin"
 Environment=SOLANA_METRICS_CONFIG=host=https://metrics.solana.com:8086,db=mainnet-beta,u=mainnet-beta_write,p=password
-ExecStart=/home/sol/bin/validator.sh
-ExecStop=/home/sol/agave/bin/agave-validator --ledger /mnt/ledger exit
+ExecStart=/usr/bin/numactl --interleave=all /home/sol/bin/validator.sh
+ExecStop=/home/sol/agave/bin/agave-validator --ledger /mnt/ledger exit --force
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> [!NOTE]
+> Adjust `ExecStart` according to the [NUMA Pinning](#numa-pinning) section (drop `numactl` entirely on single-node systems).
 
 ### Setup log rotation
 
@@ -675,7 +717,7 @@ Re-downloading a snapshot from the network on every restart wastes time. The `va
 agave-validator -l /mnt/ledger wait-for-restart-window --min-idle-time 2
 ```
 
-This blocks until the validator is at least 2 minutes from being scheduled as a leader **and** a fresh full snapshot has been written to disk. It is the safest way to prepare for a restart.
+This blocks until the validator is at least 2 minutes from being scheduled as a leader **and** a fresh full snapshot has been written to disk. It is the safest way to prepare for a restart. On an RPC node started with `--no-voting` there are no leader slots, so effectively it just waits for a fresh snapshot.
 
 > [!TIP]
 > Add `--skip-new-snapshot-check` if you already have a recent snapshot and just want to find a quiet window without waiting for a new one to be generated.
@@ -738,7 +780,7 @@ export LEDGER_DIR=/mnt/ledger; bash -c "$(curl -fsSL https://raw.githubuserconte
 ```
 
 
-Next, open the [`shredstream.sh`](./bin/shredstream.sh) file for editing:
+Next, open the [`shredstream.sh`](./bin/shredstream.sh) file for editing and replace the port in `--dest-ip-ports` with the TVU port printed above (`8001` in `validator.sh` is the **gossip** port, not TVU):
 
 ```bash
 vi /home/sol/bin/shredstream.sh
@@ -792,7 +834,7 @@ sudo systemctl status shredstream.service
 | Command                          | Description                         |
 | -------------------------------- | ----------------------------------- |
 | `tail -f ~/agave-validator.log`  | follow the logs of the Agave node   |
-| `agave-validator monitor`        | monitor the validator               |
+| `agave-validator -l /mnt/ledger monitor` | monitor the validator       |
 | `solana validators`              | check list of validators            |
 | `solana catchup --our-localhost` | check how far it is from chain head |
 | `btop`                           | monitor server resources            |

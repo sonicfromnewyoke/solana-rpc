@@ -39,6 +39,7 @@ RPC=(
     # if --private-rpc is present, otherwise use --bind-address]
     --rpc-bind-address 0.0.0.0
     # Range to use for dynamically assigned ports [default: 8000-10000]
+    # Since v4.1 the validator needs 26 ports, so the range must be at least 26 wide
     --dynamic-port-range 8000-8100
     # Expose RPC methods for querying chain state and transaction history
     --full-rpc-api
@@ -53,48 +54,47 @@ RPC=(
     --enable-rpc-transaction-history
     # Enable Geyser interface even if no Geyser configs are specified
     --geyser-plugin-always-enabled
-    # Disable TPU batching delay for lowest-latency transaction forwarding
-    --tpu-coalesce-ms 0
 )
 
 REPLAY=(
     # Number of threads to use for replay of blocks on different forks (max 4)
     --replay-forks-threads 4
-    # Number of threads to use for transaction replay (≈ physical cores)
+    # Number of threads to use for transaction replay (~ physical cores)
     --replay-transactions-threads 16
-    # Use unified scheduler for block verification (fastest replay path)
-    --block-verification-method unified-scheduler
-    # Transaction execution threads for unified scheduler (cores/2)
+    # Transaction execution threads for the unified scheduler (cores/2).
+    # unified-scheduler is the only (and default) block verification method since v4.0
     --unified-scheduler-handler-threads 8
     # Number of threads for TPU transaction receive
     --tpu-transaction-receive-threads 2
     # Number of threads for TVU shred receive
     --tvu-receive-threads 4
-    # Number of threads for shred signature verification (≈ physical cores/2)
+    # Number of threads for shred signature verification (~ physical cores/2)
     --tvu-shred-sigverify-threads 8
 )
 
 POH=(
-    # EXPERIMENTAL: Specify which CPU core PoH is pinned to
-    --experimental-poh-pinned-cpu-core 10
+    # Pin the PoH thread to this CPU core. Since v4.2 the default on Linux is core 0,
+    # so always set it explicitly to your isolated core (see README "Isolate one core for PoH")
+    --poh-pinned-cpu-core 10
 )
 
-RETRANSMIT=(
-     # EXPERIMENTAL: Enable XDP zero copy for retransmit
-    --experimental-retransmit-xdp-zero-copy
-    # EXPERIMENTAL: Specify which CPU core XDP retransmit is pinned to
-    --experimental-retransmit-xdp-cpu-cores 1
-    # EXPERIMENTAL: The network interface to use for XDP retransmit
-    --experimental-retransmit-xdp-interface eth0
+XDP=(
+    # XDP transmit is enabled by default since v4.2 (SKB / copy mode) and needs
+    # CAP_NET_ADMIN + CAP_NET_RAW. Pass --no-xdp to fall back to plain UDP sockets.
+    # Zero copy mode additionally needs CAP_BPF + CAP_PERFMON and NIC driver support
+    --xdp-zero-copy
+    # CPU cores reserved for XDP transmit. Must NOT overlap the PoH core (hard error).
+    # If omitted, one core is auto-selected
+    --xdp-cpu-cores 1
+    # Network interface used for XDP transmit. Auto-detected from the default route if omitted
+    --xdp-interface eth0
 )
 
 LEDGER=(
     # Number of threads for background accounts hashing/shrink (cores/4)
     --accounts-db-background-threads 4
-    # Number of threads for foreground account operations (≈ physical cores)
+    # Number of threads for foreground account operations (~ physical cores)
     --accounts-db-foreground-threads 16
-    # More index bins = better parallelism for accounts lookups (power of 2)
-    --accounts-index-bins 128
     # Use DIR as ledger location [default: ledger]
     --ledger /mnt/ledger
     # Comma separated persistent accounts location. May be specified multiple times. [default: <LEDGER>/accounts]
@@ -106,7 +106,7 @@ LEDGER=(
     --wal-recovery-mode skip_any_corrupted_record
     # Skip ledger verification at startup for faster catchup start
     --skip-startup-ledger-verification
-    # Number of threads for RocksDB compaction (≈ physical cores/2)
+    # Number of threads for RocksDB compaction (~ physical cores/2)
     --rocksdb-compaction-threads 8
     # Number of threads for RocksDB memtable flush (cores/4)
     --rocksdb-flush-threads 4
@@ -124,7 +124,7 @@ SNAPSHOTS=(
     # The maximum number of full snapshot archives to hold on to when purging older snapshots. [default: 2]
     --maximum-full-snapshots-to-retain 1
     # The maximum number of incremental snapshot archives to hold on to when purging older snapshots.
-    # [default: 4]
+    # [default: 4]. Since v4.2 incremental snapshots are taken every 200 slots by default
     --maximum-incremental-snapshots-to-retain 2
 )
 
@@ -145,4 +145,15 @@ REPORTING=(
     --no-os-disk-stats-reporting
 )
 
-exec agave-validator ${CONSENSUS[@]} ${GOSSIP[@]} ${RPC[@]} ${REPLAY[@]} ${POH[@]} ${RETRANSMIT[@]} ${LEDGER[@]} ${SNAPSHOTS[@]} ${SNAPSHOT_SOURCE[@]} ${LOG[@]} ${REPORTING[@]}
+exec agave-validator \
+    "${CONSENSUS[@]}" \
+    "${GOSSIP[@]}" \
+    "${RPC[@]}" \
+    "${REPLAY[@]}" \
+    "${POH[@]}" \
+    "${XDP[@]}" \
+    "${LEDGER[@]}" \
+    "${SNAPSHOTS[@]}" \
+    "${SNAPSHOT_SOURCE[@]}" \
+    "${LOG[@]}" \
+    "${REPORTING[@]}"

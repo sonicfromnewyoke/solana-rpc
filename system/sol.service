@@ -16,6 +16,12 @@ LimitNOFILE=2000000
 LimitMEMLOCK=2000000000
 LogRateLimitIntervalSec=0
 User=sol
+# Linux capabilities required for XDP (enabled by default since v4.2).
+# CAP_NET_RAW + CAP_NET_ADMIN are required for XDP; CAP_BPF + CAP_PERFMON only for --xdp-zero-copy.
+# Since v4.0 a missing required capability is a hard error at startup, and unneeded ones log a warning.
+# Using ambient capabilities here means no `setcap` is needed after every rebuild of the binary.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_BPF CAP_PERFMON
 Environment="PATH=/home/sol/agave/bin"
 Environment=SOLANA_METRICS_CONFIG=host=https://metrics.solana.com:8086,db=mainnet-beta,u=mainnet-beta_write,p=password
 ExecStart=/usr/bin/numactl --interleave=all /home/sol/bin/validator.sh
